@@ -1,0 +1,10 @@
+pip install schedule
+pip install python-dotenv
+pip install feedparser
+pip install nltk spacy
+
+pip install openai feedparser newspaper3k
+pip install openai feedparser newspaper3k spacy
+python -m nltk.downloader punkt
+python -m spacy download en_core_web_sm
+ pip install lxml[html_clean]
