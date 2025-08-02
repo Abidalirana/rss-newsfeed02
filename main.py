@@ -1,23 +1,13 @@
-# --- main.py ---
+# main.py
 import asyncio
-from myagents.collectoragent import collector
-from myagents.summarizeragent import run_summarizer
-from myagents.taggeragnet import tagger_agent
-from myagents.mainagent import main_agent
+from myagents.mainagent import run_main_agent  # uses the alias you just exported
 
-from agents import Runner
-
-# Main async function to be called from scheduler
 async def main():
-    test_messages = [{
-        "role": "user",
-        "content": "Fetch news for: openai, chatgpt\nMax results: 2\nFilters: None"
-    }]
+    try:
+        await run_main_agent()
+        print("✅ Agent pipeline finished successfully.")
+    except Exception as e:
+        print(f"❌ Error occurred while running agent: {e}")
 
-    print("🔁 Running main() from main.py...")
-    result = await Runner.run(main_agent, input=test_messages)
-    print("✅ Final Output:\n", result.final_output)
-
-# Optional: Direct run if main.py is executed alone
 if __name__ == "__main__":
     asyncio.run(main())
