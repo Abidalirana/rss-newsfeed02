@@ -2,19 +2,24 @@
 import sys
 import os
 import asyncio
-from typing import List
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
+# Add root path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# --- AGENT PLATFORM IMPORTS ---
 from agents import (
     Agent, handoff, HandoffInputData, Runner,
     set_tracing_disabled, OpenAIChatCompletionsModel
 )
 from agents.extensions import handoff_filters
 
+# --- AGENT COMPONENTS ---
 from myagents.mytools import (
     fetch_rss, filter_new, scrape_and_compress,
     summarize_text, tag_topics, FeedOut
@@ -22,15 +27,24 @@ from myagents.mytools import (
 from myagents.collectoragent import collector
 from myagents.summarizeragent import summarizer
 from myagents.taggeragnet import tagger_agent
-from agents import function_tool
 
-# ✅ Input model for Feed
+# --- DATABASE ---
+from db.mydatabase01 import save_feed_items_to_db
+
+# ✅ Result wrapper
+@dataclass
+class AgentResult:
+    final_output: str
+    new_items: List[Any]  # MessageOutputItem or dict
+    metadata: Optional[Dict[str, Any]] = None
+
+# ✅ Feed input model
 class FeedInput(BaseModel):
     symbols: List[str]
     max_results: int
     filters: List[str] | None = None
 
-# ✅ Input converter: converts FeedInput to messages
+# ✅ Converts FeedInput to messages
 class FeedInputConverter:
     @staticmethod
     def to_messages(inputs: List[FeedInput]) -> List[dict]:
@@ -44,7 +58,7 @@ class FeedInputConverter:
             messages.append({"role": "user", "content": msg})
         return messages
 
-# ✅ Optional: input filter before summarization
+# ✅ Filter before summarizer agent
 def to_summarizer_filter(h: HandoffInputData) -> HandoffInputData:
     h = handoff_filters.remove_all_tools(h)
     return HandoffInputData(
@@ -53,7 +67,7 @@ def to_summarizer_filter(h: HandoffInputData) -> HandoffInputData:
         new_items=h.new_items,
     )
 
-# ✅ Load env + Gemini setup
+# ✅ Load environment variables
 load_dotenv()
 set_tracing_disabled(True)
 
@@ -71,7 +85,7 @@ model = OpenAIChatCompletionsModel(
     openai_client=external_client
 )
 
-# ✅ Main agent definition
+# ✅ Main Agent
 main_agent = Agent(
     name="MainAgent",
     model=model,
@@ -95,7 +109,7 @@ Return final FeedOut.
     ]
 )
 
-# ✅ Runner and test input
+# ✅ Runner
 async def run_main_agent_test():
     test_input = [FeedInput(
         symbols=["openai", "chatgpt"],
@@ -103,17 +117,52 @@ async def run_main_agent_test():
         filters=None
     )]
 
-    # Convert FeedInput to messages BEFORE passing into Runner
     messages = FeedInputConverter.to_messages(test_input)
+    result = await Runner.run(main_agent, input=messages)
 
-    result = await Runner.run(
-        main_agent,
-        input=messages
+    # Filter valid items (fix: no `.get()`)
+    valid_items = [
+        item for item in result.new_items
+        if hasattr(item, "link") and hasattr(item, "title") and item.link and item.title
+    ]
+
+    metadata = {
+        "agent": "MainAgent",
+        "items_collected": len(valid_items),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    custom_result = AgentResult(
+        final_output=result.final_output,
+        new_items=valid_items,
+        metadata=metadata
     )
 
-    print("✅ Final Output from MainAgent:\n", result.final_output)
+    # Print result
+    print("\n✅ Final Output from MainAgent:\n")
+    print(custom_result.final_output)
 
+    print("\n📊 Metadata:", metadata)
 
+    if valid_items:
+        print(f"\n🧾 Valid Feed Items ({len(valid_items)}):")
+        for i, item in enumerate(valid_items, 1):
+            print(f"\n{i}. 📰 {item.title}")
+            print(f"🔗 {item.link}")
+            print(f"📅 {getattr(item, 'published', 'N/A')}")
+            print(f"📄 {getattr(item, 'summary', 'No summary')}")
+            print("-" * 40)
 
+        # Save to DB
+        await save_feed_items_to_db(valid_items)
+        print(f"\n💾 {len(valid_items)} valid items saved to DB.")
+    else:
+        print("\n⚠️ No valid items to save.")
+# ✅ Export for external use
+run_main_agent = run_main_agent_test
+# ✅ Entry point
 if __name__ == "__main__":
+   
     asyncio.run(run_main_agent_test())
+   
+
