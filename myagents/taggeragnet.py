@@ -36,20 +36,20 @@ async def tag_news_items(items: List[FeedOut]) -> List[dict]:
     Tag all summarized items in one API call.
     Returns list of dicts: {title, summary, symbols, tags, link, published}
     """
-    # Prepare list of news for the model
     news_list_str = "\n\n".join(
         [f"{i+1}. Title: {item.title}\nSummary: {item.summary}" for i, item in enumerate(items)]
     )
 
     prompt = f"""
 You are a financial tagging assistant.
+Respond ONLY with valid JSON — no explanations, no text outside JSON.
 
 For each news item below (title + summary):
 1. Extract any stock **symbols** (e.g., AAPL, TSLA, MSFT)
 2. Extract relevant **tags** such as: earnings, macro, fed, AI, tech, energy, crypto, etc.
-3. Only return JSON array, where each element matches the input order.
+3. Output a JSON array where each element matches the order of the news items.
 
-Example output:
+Example:
 [
   {{"symbols": ["AAPL"], "tags": ["earnings", "AI"]}},
   {{"symbols": ["TSLA"], "tags": ["auto", "earnings"]}}
@@ -66,9 +66,32 @@ News items:
         temperature=0
     )
 
-    # Parse JSON from model output
-    tags_data = json.loads(resp.choices[0].message.content.strip())
+    # --- Safe extraction ---
+    raw_content = ""
+    try:
+        raw_content = (
+            resp.choices[0].message["content"]
+            if isinstance(resp.choices[0].message, dict)
+            else resp.choices[0].message.content
+        )
+    except Exception as e:
+        print("❌ Could not read model output:", e)
 
+    if not raw_content or not raw_content.strip():
+        print("❌ Model returned no content. Full response:")
+        print(resp)
+        return []
+
+    # --- Safe JSON parsing ---
+    try:
+        tags_data = json.loads(raw_content.strip())
+    except json.JSONDecodeError as e:
+        print("❌ Failed to parse JSON:", e)
+        print("🔍 Raw model output:")
+        print(raw_content)
+        return []
+
+    # --- Combine with input items ---
     final = []
     for item, tags in zip(items, tags_data):
         final.append({
@@ -84,7 +107,6 @@ News items:
 
 # === DEMO ===
 async def demo():
-    # Fake sample items to test
     sample_items = [
         FeedOut(
             title="Apple beats Q2 earnings expectations with strong iPhone sales",
