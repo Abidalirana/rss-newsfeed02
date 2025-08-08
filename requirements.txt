@@ -8,6 +8,7 @@ pip install openai feedparser newspaper3k spacy
 python -m nltk.downloader punkt
 python -m spacy download en_core_web_sm
  pip install lxml[html_clean]
+uv pip install sqlalchemy asyncpg
 
 
 

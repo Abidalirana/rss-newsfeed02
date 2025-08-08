@@ -9,7 +9,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from agents import Agent, Runner, set_tracing_disabled, OpenAIChatCompletionsModel
-from myagents.mytools import fetch_rss, filter_new, scrape_and_compress  # ✅ Only required tools
+from myagents.mytools import (
+    fetch_rss,
+    filter_new,
+    scrape_and_compress,
+    scrape_tradingview_news_flow,
+    fetch_site_news  # ✅ add this line
+)
 
 # === ENV & Config ===
 load_dotenv()
@@ -36,12 +42,21 @@ collector = Agent(
     instructions="""
 You're a News Collection Agent.
 
-1. Use `fetch_rss` to get new RSS articles.
-2. Use `filter_new` to skip already-seen titles.
-3. Use `scrape_and_compress` to extract and shorten the content.
-Return title, url, published_at, excerpt.
+1. Use `fetch_rss` to collect RSS news by symbol.
+2. Use `scrape_tradingview_news_flow` to collect news from TradingView.
+3. Use `filter_new` to skip already-seen titles.
+4. Use `scrape_and_compress` to extract and shorten content.
+5.Use `fetch_site_news` to gather headlines from many financial news platforms.
+
+Return title, url, published_at, and excerpt or summary.
 """,
-    tools=[fetch_rss, filter_new, scrape_and_compress],
+    tools=[
+        fetch_rss,
+        filter_new,
+        scrape_and_compress,
+        scrape_tradingview_news_flow, fetch_site_news 
+
+    ],
     model=model
 )
 
