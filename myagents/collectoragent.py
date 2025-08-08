@@ -1,71 +1,96 @@
-# myagents/collectoragent.py
-import os
-import sys
+# collector.py (Cleaned: No Agent, Pure Python Script)
 import asyncio
+import hashlib
+import httpx
+import feedparser
+from typing import List
+from bs4 import BeautifulSoup
+from pydantic import BaseModel, HttpUrl
 
-# Ensure parent dir is in sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+# === SCHEMAS ===
+class FeedOut(BaseModel):
+    title: str
+    link: HttpUrl
+    published: str
+    summary: str
+    hash: str
 
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
-from agents import Agent, Runner, set_tracing_disabled, OpenAIChatCompletionsModel
-from myagents.mytools import (
-    fetch_rss,
-    filter_new,
-    scrape_and_compress,
-    scrape_tradingview_news_flow,
-    fetch_site_news  # ✅ add this line
-)
+# === HELPERS ===
+def strip_html_tags(text: str) -> str:
+    """Clean HTML from summary."""
+    soup = BeautifulSoup(text, "html.parser")
+    return soup.get_text(separator=" ", strip=True)
 
-# === ENV & Config ===
-load_dotenv()
-set_tracing_disabled(True)
+async def fetch_all_rss(max_per: int = 5) -> List[FeedOut]:
+    """Fetch from 40+ predefined RSS feeds."""
+    RSS_FEEDS = {
+        "Yahoo Finance": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL&region=US&lang=en-US",
+        "MarketWatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "Nasdaq": "https://www.nasdaq.com/feed/rssoutbound?category=Business",
+        "Reuters": "https://www.reutersagency.com/en/reuters-best/rss-feed/",
+        "Finextra": "https://www.finextra.com/rss/latestnews.aspx",
+        "TheStreet": "https://www.thestreet.com/.rss/full/",
+        "Zacks": "https://www.zacks.com/commentary/rss.php",
+        "Business Insider": "https://markets.businessinsider.com/rss/news",
+        "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+        "Forbes Markets": "https://www.forbes.com/markets/feed/",
+        "FXStreet": "https://www.fxstreet.com/rss/news",
+        "DailyFX": "https://www.dailyfx.com/feeds/all",
+        "Cryptonews": "https://cryptonews.com/news/feed/",
+        "Bitcoin Magazine": "https://bitcoinmagazine.com/.rss/full/",
+        "TechCrunch Fintech": "https://techcrunch.com/tag/fintech/feed/",
+        "The Economic Times": "https://economictimes.indiatimes.com/rssfeedsdefault.cms",
+        "Livemint": "https://www.livemint.com/rss/market",
+        "Decrypt": "https://decrypt.co/feed",
+        "NewsBTC": "https://www.newsbtc.com/feed/",
+        "Tokenist": "https://tokenist.com/feed/",
+        "Brave New Coin": "https://bravenewcoin.com/news/feed",
+        "Investopedia": "https://www.investopedia.com/feedbuilder/feed/getfeed/?feedName=rss_headline",
+        "Motley Fool": "https://www.fool.com/feeds/index.aspx?id=foolwatch&format=rss2",
+        "ZeroHedge": "https://www.zerohedge.com/fullrss.xml",
+        "Trading Economics": "https://tradingeconomics.com/rss/news.aspx",
+        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "Cointelegraph": "https://cointelegraph.com/rss",
+        "CryptoSlate": "https://cryptoslate.com/feed/",
+        "Financial Times": "https://www.ft.com/?format=rss",
+        "MoneyControl": "https://www.moneycontrol.com/rss/marketnews.xml",
+        "AMBCrypto": "https://ambcrypto.com/feed",
+        "Finbold": "https://finbold.com/feed",
+        "CryptoGlobe": "https://cryptoglobe.com/feed",
+        "Watcher.Guru": "https://watcher.guru/feed",
+        "Investing.com News": "https://www.investing.com/rss/news_25.rss",
+        "The Block": "https://www.theblock.co/rss",
+        "Capital.com": "https://capital.com/news/rss",
+    }
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("❌ GEMINI_API_KEY is missing in .env")
+    results = []
+    async with httpx.AsyncClient(timeout=10) as client:
+        tasks = [client.get(url, follow_redirects=True) for url in RSS_FEEDS.values()]
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for (src, url), resp in zip(RSS_FEEDS.items(), responses):
+            if isinstance(resp, Exception) or resp.status_code != 200:
+                continue
+            d = feedparser.parse(resp.text)
+            for entry in d.entries[:max_per]:
+                summary = strip_html_tags(entry.get("summary", ""))[:300]
+                results.append(
+                    FeedOut(
+                        title=entry.title,
+                        link=entry.link,
+                        published=getattr(entry, "published", ""),
+                        summary=summary,
+                        hash=hashlib.md5(entry.link.encode()).hexdigest(),
+                    )
+                )
+    return results
 
-# === External Model Setup ===
-external_client = AsyncOpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-)
-
-model = OpenAIChatCompletionsModel(
-    model="gemini-2.0-flash",
-    openai_client=external_client
-)
-
-# === Agent Setup ===
-collector = Agent(
-    name="CollectorAgent",
-    instructions="""
-You're a News Collection Agent.
-
-1. Use `fetch_rss` to collect RSS news by symbol.
-2. Use `scrape_tradingview_news_flow` to collect news from TradingView.
-3. Use `filter_new` to skip already-seen titles.
-4. Use `scrape_and_compress` to extract and shorten content.
-5.Use `fetch_site_news` to gather headlines from many financial news platforms.
-
-Return title, url, published_at, and excerpt or summary.
-""",
-    tools=[
-        fetch_rss,
-        filter_new,
-        scrape_and_compress,
-        scrape_tradingview_news_flow, fetch_site_news 
-
-    ],
-    model=model
-)
-
-# === Runner ===
+# === DEMO ===
 if __name__ == "__main__":
-    async def main():
-        print("📰 Collector Agent Running...")
-        result = await Runner.run(collector, [{"role": "user", "content": "Collect latest financial news."}])
-        print("\n📢 Collected Output:\n")
-        print(result.final_output)
+    async def demo():
+        print("\n📰 Fetching RSS feeds...")
+        items = await fetch_all_rss()
+        print(f"✅ Got {len(items)} items\n")
+        for i, item in enumerate(items[:5], 1):
+            print(f"{i}. {item.title} — {item.link}")
 
-    asyncio.run(main())
+    asyncio.run(demo())

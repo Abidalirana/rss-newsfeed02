@@ -1,7 +1,5 @@
 # --- mainagent.py ---
-import sys
-import os
-import asyncio
+import sys, os, asyncio
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,10 +7,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-# Add root path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# --- AGENT PLATFORM IMPORTS ---
 from agents import (
     Agent, handoff, HandoffInputData, Runner,
     set_tracing_disabled, OpenAIChatCompletionsModel
@@ -20,13 +16,9 @@ from agents import (
 from agents.extensions import handoff_filters
 
 # --- AGENT COMPONENTS ---
-from myagents.mytools import (
-    fetch_rss, filter_new, scrape_and_compress,
-    summarize_text, tag_topics, FeedOut
-)
 from myagents.collectoragent import collector
 from myagents.summarizeragent import summarizer
-from myagents.taggeragnet import tagger_agent
+from myagents.taggeragent import tagger_agent  # ← fixed typo
 
 # --- DATABASE ---
 from db.mydatabase01 import save_feed_items_to_db
@@ -35,7 +27,7 @@ from db.mydatabase01 import save_feed_items_to_db
 @dataclass
 class AgentResult:
     final_output: str
-    new_items: List[Any]  # MessageOutputItem or dict
+    new_items: List[Any]
     metadata: Optional[Dict[str, Any]] = None
 
 # ✅ Feed input model
@@ -77,7 +69,7 @@ if not GEMINI_API_KEY:
 
 external_client = AsyncOpenAI(
     api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"  # ✅ fixed
 )
 
 model = OpenAIChatCompletionsModel(
@@ -85,28 +77,20 @@ model = OpenAIChatCompletionsModel(
     openai_client=external_client
 )
 
-# ✅ Main Agent
+# ✅ Main Agent with hand-offs
 main_agent = Agent(
     name="MainAgent",
     model=model,
-    instructions="""
-Step 1: Handoff to CollectorAgent.
-Step 2: Handoff collected items to SummarizerAgent.
-Step 3: Handoff to TaggerAgent.
-Return final FeedOut.
+    instructions="""You are MainAgent. Follow this sequence:
+1. Handoff to CollectorAgent to fetch news items.
+2. Handoff collected items to SummarizerAgent.
+3. Handoff final items to TaggerAgent.
 """,
     handoffs=[
         handoff(collector),
         handoff(summarizer, input_filter=to_summarizer_filter),
         handoff(tagger_agent),
     ],
-    tools=[
-        fetch_rss,
-        filter_new,
-        scrape_and_compress,
-        summarize_text,
-        tag_topics
-    ]
 )
 
 # ✅ Runner
@@ -120,7 +104,6 @@ async def run_main_agent_test():
     messages = FeedInputConverter.to_messages(test_input)
     result = await Runner.run(main_agent, input=messages)
 
-    # Filter valid items (fix: no `.get()`)
     valid_items = [
         item for item in result.new_items
         if hasattr(item, "link") and hasattr(item, "title") and item.link and item.title
@@ -138,10 +121,8 @@ async def run_main_agent_test():
         metadata=metadata
     )
 
-    # Print result
     print("\n✅ Final Output from MainAgent:\n")
     print(custom_result.final_output)
-
     print("\n📊 Metadata:", metadata)
 
     if valid_items:
@@ -150,19 +131,20 @@ async def run_main_agent_test():
             print(f"\n{i}. 📰 {item.title}")
             print(f"🔗 {item.link}")
             print(f"📅 {getattr(item, 'published', 'N/A')}")
-            print(f"📄 {getattr(item, 'summary', 'No summary')}")
             print("-" * 40)
 
-        # Save to DB
         await save_feed_items_to_db(valid_items)
         print(f"\n💾 {len(valid_items)} valid items saved to DB.")
     else:
         print("\n⚠️ No valid items to save.")
+
 # ✅ Export for external use
 run_main_agent = run_main_agent_test
+
 # ✅ Entry point
 if __name__ == "__main__":
-   
-    asyncio.run(run_main_agent_test())
-   
-
+    try:
+        asyncio.run(run_main_agent_test())
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(run_main_agent_test())

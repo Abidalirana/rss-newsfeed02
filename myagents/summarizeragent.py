@@ -1,45 +1,75 @@
-# myagents/summarizeragent.py
-
 import os
+import sys
 import asyncio
+from typing import List
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from agents import Agent, Runner, set_tracing_disabled, OpenAIChatCompletionsModel
-from myagents.mytools import FeedOut  # ✅ follow mytools.py structure
+from collectoragent import fetch_all_rss, FeedOut
+from agents import set_tracing_disabled, OpenAIChatCompletionsModel
 
-# === Load env ===
+# === ENV ===
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 load_dotenv()
 set_tracing_disabled(True)
 
-# === External Gemini model ===
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY is missing in .env")
 
-external_client = AsyncOpenAI(
+client = AsyncOpenAI(
     api_key=GEMINI_API_KEY,
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
 )
 
 model = OpenAIChatCompletionsModel(
     model="gemini-2.0-flash",
-    openai_client=external_client
+    openai_client=client
 )
 
-# === Agent ===
-summarizer = Agent(
-    name="SummarizerAgent",
-    instructions="""
-        Summarize the excerpt into ≤3 bullet points (≤120 characters each).
-        Extract relevant stock symbols (e.g., AAPL, TSLA).
-        Tag the article with topics: earnings, macro, analyst_rating, etc.
-        Respond in strict JSON format using the FeedOut schema.
-    """,
-    model=model,
-    output_type=FeedOut,  # ✅ Using FeedOut from mytools.py
-)
+# === SUMMARIZER FUNCTION (All in one request) ===
+async def summarize_all_at_once(items: List[FeedOut]) -> str:
+    # Build one big text block
+    news_block = ""
+    for idx, item in enumerate(items, start=1):
+        news_block += f"{idx}. {item.title}\n{item.summary}\n\n"
 
-# === Runner ===
-async def run_summarizer(items: list[dict]) -> list[FeedOut]:
-    runner = Runner(agent=summarizer)
-    return await runner.run(items)
+    prompt = f"""
+    You are a financial news summarizer.
+
+    Here are multiple news articles from RSS feeds:
+
+    {news_block}
+
+    Task:
+    1. Summarize each news item into ≤3 bullet points (≤120 chars each).
+    2. Keep bullet points short & factual.
+    3. For each news item, keep its original number.
+
+    Output format:
+    <number>. <original title>
+       • bullet1
+       • bullet2
+       • bullet3
+    """
+
+    resp = await client.chat.completions.create(
+        model="gemini-2.0-flash",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=2000,  # Bigger limit for all news
+        temperature=0.2
+    )
+    return resp.choices[0].message.content.strip()
+
+# === MAIN ===
+async def main():
+    print("\n📰 Fetching RSS feeds...")
+    items = await fetch_all_rss(max_per=3)  # Change max_per if needed
+    print(f"✅ Got {len(items)} items, sending ALL to summarizer in one request...\n")
+
+    summaries = await summarize_all_at_once(items)
+
+    print("\n📄 Summarized Results:\n")
+    print(summaries)
+
+if __name__ == "__main__":
+    asyncio.run(main())
