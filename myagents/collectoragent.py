@@ -1,96 +1,150 @@
-# collector.py (Cleaned: No Agent, Pure Python Script)
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import asyncio
 import hashlib
 import httpx
 import feedparser
-from typing import List
 from bs4 import BeautifulSoup
-from pydantic import BaseModel, HttpUrl
+from datetime import datetime
+from typing import List
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base, mapped_column, Mapped
+from sqlalchemy import (
+    String,
+    Integer,
+    Text,
+    DateTime,
+    ARRAY,
+)
+from sqlalchemy import select
 
-# === SCHEMAS ===
-class FeedOut(BaseModel):
-    title: str
-    link: HttpUrl
-    published: str
-    summary: str
-    hash: str
+# --- DB setup ---
+DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
 
-# === HELPERS ===
-def strip_html_tags(text: str) -> str:
-    """Clean HTML from summary."""
-    soup = BeautifulSoup(text, "html.parser")
-    return soup.get_text(separator=" ", strip=True)
+engine = create_async_engine(DATABASE_URL, echo=True)
+async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+Base = declarative_base()
 
-async def fetch_all_rss(max_per: int = 5) -> List[FeedOut]:
-    """Fetch from 40+ predefined RSS feeds."""
-    RSS_FEEDS = {
-        "Yahoo Finance": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL&region=US&lang=en-US",
-        "MarketWatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
-        "Nasdaq": "https://www.nasdaq.com/feed/rssoutbound?category=Business",
-        "Reuters": "https://www.reutersagency.com/en/reuters-best/rss-feed/",
-        "Finextra": "https://www.finextra.com/rss/latestnews.aspx",
-        "TheStreet": "https://www.thestreet.com/.rss/full/",
-        "Zacks": "https://www.zacks.com/commentary/rss.php",
-        "Business Insider": "https://markets.businessinsider.com/rss/news",
-        "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-        "Forbes Markets": "https://www.forbes.com/markets/feed/",
-        "FXStreet": "https://www.fxstreet.com/rss/news",
-        "DailyFX": "https://www.dailyfx.com/feeds/all",
-        "Cryptonews": "https://cryptonews.com/news/feed/",
-        "Bitcoin Magazine": "https://bitcoinmagazine.com/.rss/full/",
-        "TechCrunch Fintech": "https://techcrunch.com/tag/fintech/feed/",
-        "The Economic Times": "https://economictimes.indiatimes.com/rssfeedsdefault.cms",
-        "Livemint": "https://www.livemint.com/rss/market",
-        "Decrypt": "https://decrypt.co/feed",
-        "NewsBTC": "https://www.newsbtc.com/feed/",
-        "Tokenist": "https://tokenist.com/feed/",
-        "Brave New Coin": "https://bravenewcoin.com/news/feed",
-        "Investopedia": "https://www.investopedia.com/feedbuilder/feed/getfeed/?feedName=rss_headline",
-        "Motley Fool": "https://www.fool.com/feeds/index.aspx?id=foolwatch&format=rss2",
-        "ZeroHedge": "https://www.zerohedge.com/fullrss.xml",
-        "Trading Economics": "https://tradingeconomics.com/rss/news.aspx",
-        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-        "Cointelegraph": "https://cointelegraph.com/rss",
-        "CryptoSlate": "https://cryptoslate.com/feed/",
-        "Financial Times": "https://www.ft.com/?format=rss",
-        "MoneyControl": "https://www.moneycontrol.com/rss/marketnews.xml",
-        "AMBCrypto": "https://ambcrypto.com/feed",
-        "Finbold": "https://finbold.com/feed",
-        "CryptoGlobe": "https://cryptoglobe.com/feed",
-        "Watcher.Guru": "https://watcher.guru/feed",
-        "Investing.com News": "https://www.investing.com/rss/news_25.rss",
-        "The Block": "https://www.theblock.co/rss",
-        "Capital.com": "https://capital.com/news/rss",
-    }
+class NewsItem(Base):
+    __tablename__ = "news_items"
 
-    results = []
-    async with httpx.AsyncClient(timeout=10) as client:
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(100), nullable=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=True)
+    tags: Mapped[List[str]] = mapped_column(ARRAY(String), default=[])
+    symbols: Mapped[List[str]] = mapped_column(ARRAY(String), default=[])
+    url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=True)
+
+# --- Helpers ---
+
+def clean_html(text: str) -> str:
+    return BeautifulSoup(text or "", "html.parser").get_text(" ", strip=True)[:320]
+
+def parse_datetime(date_str: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(date_str)
+    except Exception:
+        return None
+
+# --- RSS Feeds ---
+
+RSS_FEEDS = {
+    "MarketWatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "TheStreet": "https://www.thestreet.com/.rss/full/",
+    "FXStreet": "https://www.fxstreet.com/rss/news",
+    "CryptoNews": "https://cryptonews.com/news/feed/",
+    "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "Yahoo Finance": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL&region=US&lang=en-US",
+    "Nasdaq": "https://www.nasdaq.com/feed/rssoutbound?category=Business",
+    "Investopedia": "https://www.investopedia.com/feedbuilder/feed/getfeed/?feedName=rss_headline",
+    "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "Cointelegraph": "https://cointelegraph.com/rss",
+    "The Block": "https://www.theblock.co/rss",
+    "CryptoSlate": "https://cryptoslate.com/feed/",
+    "Watcher.Guru": "https://watcher.guru/feed",
+    "Finbold": "https://finbold.com/feed",
+    "ZeroHedge": "https://www.zerohedge.com/fullrss.xml",
+}
+
+# --- Main fetching function ---
+
+async def fetch_and_store(max_per: int = 3) -> List[NewsItem]:
+    collected_items = []
+    if sys.platform.startswith("win"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    async with httpx.AsyncClient(timeout=15) as client, async_session() as session:
         tasks = [client.get(url, follow_redirects=True) for url in RSS_FEEDS.values()]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
-        for (src, url), resp in zip(RSS_FEEDS.items(), responses):
+
+        for (source, resp) in zip(RSS_FEEDS.keys(), responses):
             if isinstance(resp, Exception) or resp.status_code != 200:
+                print(f"Failed to fetch {source}")
                 continue
-            d = feedparser.parse(resp.text)
-            for entry in d.entries[:max_per]:
-                summary = strip_html_tags(entry.get("summary", ""))[:300]
-                results.append(
-                    FeedOut(
-                        title=entry.title,
-                        link=entry.link,
-                        published=getattr(entry, "published", ""),
-                        summary=summary,
-                        hash=hashlib.md5(entry.link.encode()).hexdigest(),
-                    )
+
+            feed = feedparser.parse(resp.text)
+            for entry in feed.entries[:max_per]:
+                url = entry.link
+                exists = await session.scalar(select(NewsItem.id).where(NewsItem.url == url))
+                if exists:
+                    continue
+
+                published = None
+                if hasattr(entry, "published"):
+                    try:
+                        published = datetime(*entry.published_parsed[:6])
+                    except Exception:
+                        published = None
+
+                summary = clean_html(entry.get("summary", ""))
+
+                item = NewsItem(
+                    title=entry.title,
+                    source=source,
+                    published_at=published,
+                    content=None,
+                    summary=summary,
+                    tags=[],
+                    symbols=[],
+                    url=url,
+                    provider="rss"
                 )
-    return results
+                session.add(item)
+                collected_items.append(item)
+            await session.commit()
+    return collected_items
 
-# === DEMO ===
+# --- Create tables function ---
+
+async def create_tables() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+# --- Wrapper function for collector ---
+
+async def run_collector(messages=None):
+    # If you want, parse messages here to set max_per, for now fixed 3
+    max_per = 3
+    collected_items = await fetch_and_store(max_per=max_per)
+    return collected_items
+
+# --- Main function to test ---
+
+async def main():
+    await create_tables()
+    print("Tables created")
+
+    print("Starting collector...")
+    items = await run_collector()
+    print(f"Collected {len(items)} new news items.")
+    for i, item in enumerate(items, 1):
+        print(f"{i}. {item.title} - {item.url}")
+
 if __name__ == "__main__":
-    async def demo():
-        print("\n📰 Fetching RSS feeds...")
-        items = await fetch_all_rss()
-        print(f"✅ Got {len(items)} items\n")
-        for i, item in enumerate(items[:5], 1):
-            print(f"{i}. {item.title} — {item.link}")
-
-    asyncio.run(demo())
+    asyncio.run(main())

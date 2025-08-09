@@ -1,10 +1,9 @@
-# main.py
 import asyncio
-from myagents.mainagent import run_main_agent  # uses the alias you just exported
+from myagents.mainagent import run_pipeline  # import the coroutine
 
 async def main():
     try:
-        await run_main_agent()
+        await run_pipeline()
         print("✅ Agent pipeline finished successfully.")
     except Exception as e:
         print(f"❌ Error occurred while running agent: {e}")

@@ -1,150 +1,39 @@
-# --- mainagent.py ---
-import sys, os, asyncio
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pydantic import BaseModel
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
+import sys
+import os
+import traceback
+import asyncio
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agents import (
-    Agent, handoff, HandoffInputData, Runner,
-    set_tracing_disabled, OpenAIChatCompletionsModel
-)
-from agents.extensions import handoff_filters
+from myagents.collectoragent import run_collector
+from myagents.summarizeragent import run_summarizer
+from myagents.taggeragnet import run_tagger   
+from myagents.db import save_feed_items_to_db
 
-# --- AGENT COMPONENTS ---
-from myagents.collectoragent import collector
-from myagents.summarizeragent import summarizer
-from myagents.taggeragent import tagger_agent  # ← fixed typo
-
-# --- DATABASE ---
-from db.mydatabase01 import save_feed_items_to_db
-
-# ✅ Result wrapper
-@dataclass
-class AgentResult:
-    final_output: str
-    new_items: List[Any]
-    metadata: Optional[Dict[str, Any]] = None
-
-# ✅ Feed input model
-class FeedInput(BaseModel):
-    symbols: List[str]
-    max_results: int
-    filters: List[str] | None = None
-
-# ✅ Converts FeedInput to messages
 class FeedInputConverter:
     @staticmethod
-    def to_messages(inputs: List[FeedInput]) -> List[dict]:
-        messages = []
-        for inp in inputs:
-            msg = (
-                f"Fetch news for: {', '.join(inp.symbols)}\n"
-                f"Max results: {inp.max_results}\n"
-                f"Filters: {', '.join(inp.filters) if inp.filters else 'None'}"
-            )
-            messages.append({"role": "user", "content": msg})
-        return messages
+    def to_messages(input_data):
+        # just return input data as messages for now
+        return input_data
 
-# ✅ Filter before summarizer agent
-def to_summarizer_filter(h: HandoffInputData) -> HandoffInputData:
-    h = handoff_filters.remove_all_tools(h)
-    return HandoffInputData(
-        input_history=h.input_history[-1:],
-        pre_handoff_items=(),
-        new_items=h.new_items,
-    )
-
-# ✅ Load environment variables
-load_dotenv()
-set_tracing_disabled(True)
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("❌ GEMINI_API_KEY is missing in .env")
-
-external_client = AsyncOpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"  # ✅ fixed
-)
-
-model = OpenAIChatCompletionsModel(
-    model="gemini-2.0-flash",
-    openai_client=external_client
-)
-
-# ✅ Main Agent with hand-offs
-main_agent = Agent(
-    name="MainAgent",
-    model=model,
-    instructions="""You are MainAgent. Follow this sequence:
-1. Handoff to CollectorAgent to fetch news items.
-2. Handoff collected items to SummarizerAgent.
-3. Handoff final items to TaggerAgent.
-""",
-    handoffs=[
-        handoff(collector),
-        handoff(summarizer, input_filter=to_summarizer_filter),
-        handoff(tagger_agent),
-    ],
-)
-
-# ✅ Runner
-async def run_main_agent_test():
-    test_input = [FeedInput(
-        symbols=["openai", "chatgpt"],
-        max_results=2,
-        filters=None
-    )]
-
-    messages = FeedInputConverter.to_messages(test_input)
-    result = await Runner.run(main_agent, input=messages)
-
-    valid_items = [
-        item for item in result.new_items
-        if hasattr(item, "link") and hasattr(item, "title") and item.link and item.title
-    ]
-
-    metadata = {
-        "agent": "MainAgent",
-        "items_collected": len(valid_items),
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
-
-    custom_result = AgentResult(
-        final_output=result.final_output,
-        new_items=valid_items,
-        metadata=metadata
-    )
-
-    print("\n✅ Final Output from MainAgent:\n")
-    print(custom_result.final_output)
-    print("\n📊 Metadata:", metadata)
-
-    if valid_items:
-        print(f"\n🧾 Valid Feed Items ({len(valid_items)}):")
-        for i, item in enumerate(valid_items, 1):
-            print(f"\n{i}. 📰 {item.title}")
-            print(f"🔗 {item.link}")
-            print(f"📅 {getattr(item, 'published', 'N/A')}")
-            print("-" * 40)
-
-        await save_feed_items_to_db(valid_items)
-        print(f"\n💾 {len(valid_items)} valid items saved to DB.")
-    else:
-        print("\n⚠️ No valid items to save.")
-
-# ✅ Export for external use
-run_main_agent = run_main_agent_test
-
-# ✅ Entry point
-if __name__ == "__main__":
+async def run_pipeline():
     try:
-        asyncio.run(run_main_agent_test())
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(run_main_agent_test())
+        input_data = [
+            {
+                "symbols": ["AAPL", "TSLA"],
+                "max_results": 5,
+                "filters": None
+            }
+        ]
+        messages = FeedInputConverter.to_messages(input_data)
+        collected = await run_collector(messages)
+        summarized = await run_summarizer(collected)
+        tagged = await run_tagger(summarized)
+        await save_feed_items_to_db(tagged)
+        print(f"Pipeline finished: {len(tagged)} items saved.")
+    except Exception as e:
+        print(f"Pipeline error: {e}")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    asyncio.run(run_pipeline())
