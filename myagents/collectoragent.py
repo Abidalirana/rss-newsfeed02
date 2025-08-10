@@ -74,6 +74,13 @@ RSS_FEEDS = {
     "Watcher.Guru": "https://watcher.guru/feed",
     "Finbold": "https://finbold.com/feed",
     "ZeroHedge": "https://www.zerohedge.com/fullrss.xml",
+    # Trading idea & analysis focused feeds:
+    "TradingView": "https://www.tradingview.com/feed.xml",
+    "Investing.com": "https://www.investing.com/rss/news_25.rss",
+    "StockTwits": "https://stocktwits.com/streams/trending.rss",
+    "ForexFactory": "https://www.forexfactory.com/ffcal_week_this.xml",
+    "DailyFX": "https://www.dailyfx.com/feeds/market-news.xml",
+    "Benzinga": "https://www.benzinga.com/rss/markets-news",
 }
 
 # --- Main fetching function for RSS ---

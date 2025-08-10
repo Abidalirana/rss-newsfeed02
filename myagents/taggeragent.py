@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import json
 import asyncio
 import re
@@ -10,7 +12,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, mapped_column, Mapped
 from sqlalchemy import String, Integer, Text, DateTime, ARRAY, update, select
 from datetime import datetime
 from bs4 import BeautifulSoup
-
+from myagents.summarizeragent import run_summarizer
 # --- Load env and set API keys ---
 load_dotenv()
 

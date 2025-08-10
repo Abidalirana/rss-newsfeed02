@@ -1,16 +1,17 @@
-import asyncio
-import logging
-from myagents.mainagent import run_pipeline  # import the coroutine
+# main.py (your controller)
 
-# Suppress SQLAlchemy engine info logs
-logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+from myagents.collectoragent import run_collector
+from myagents.summarizeragent import run_summarizer
+from myagents.taggeragent import run_tagger
+from myagents.publisheragent import run_publisher 
 
-async def main():
-    try:
-        await run_pipeline()
-        print("✅ Agent pipeline finished successfully.")
-    except Exception as e:
-        print(f"❌ Error occurred while running agent: {e}")
+async def run_pipeline():
+    collected = await run_collector()
+    summarized = await run_summarizer(collected)
+    tagged = await run_tagger(summarized)
+    published_count = await run_publisher()  # run publisher after tagger
+    print(f"Pipeline finished: {len(tagged)} items saved, {published_count} items published.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import asyncio
+    asyncio.run(run_pipeline())

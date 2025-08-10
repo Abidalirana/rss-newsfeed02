@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
 from myagents.collectoragent import NewsItem, Base
-
+from myagents.collectoragent import run_collector
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from agents import set_tracing_disabled, OpenAIChatCompletionsModel

@@ -2,19 +2,16 @@ import asyncio
 import time
 import schedule
 import datetime
-from main import main
+from main import run_pipeline  # Adjust if your pipeline function is in another file
 
-def run_async_job():
+async def run_async_job():
     print(f"⏰ Running job at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(main())
-    loop.close()
+    await run_pipeline()
 
-# Run every 10 seconds for testing (change to e.g. every().hour.do(...) for production)
-schedule.every(10).seconds.do(run_async_job)
+# Schedule to run every 1 minute
+schedule.every(1).minutes.do(lambda: asyncio.run(run_async_job()))
 
-print("📆 Scheduler started...")
+print("📆 Scheduler started... (will run every 1 minute)")
 
 while True:
     schedule.run_pending()

@@ -1,29 +1,17 @@
 # api_server.py
 import os
-import sys
-import re
 from fastapi import FastAPI, HTTPException
 from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
-from myagents.db import async_session, NewsItem  
-from openai import AsyncOpenAI
+from myagents.db import async_session, NewsItem
 from dotenv import load_dotenv
 
 app = FastAPI()
 
-# Load env (no tracing disabling needed)
+# Load env variables
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY missing in environment")
-
-# Setup OpenAI client for Gemini (use client directly)
-client = AsyncOpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-)
-
+# === Serializer ===
 def serialize_news(news: NewsItem):
     return {
         "id": news.id,
@@ -35,9 +23,11 @@ def serialize_news(news: NewsItem):
         "tags": news.tags,
         "symbols": news.symbols,
         "url": news.url,
-        "provider": news.provider
+        "provider": news.provider,
+        "publisher": news.publisher  # Added publisher field
     }
 
+# === Basic Routes ===
 @app.get("/")
 def home():
     return {"message": "Agent API is running!"}
@@ -96,68 +86,55 @@ async def delete_news(news_id: int):
         await session.commit()
         return {"message": "Deleted successfully"}
 
-# === Summarizer functions ===
+# === Agent Endpoints ===
+@app.post("/run-collector")
+async def run_collector_endpoint():
+    from myagents.collectoragent import run_collector
+    count = await run_collector()
+    return {"message": f"Collected {count} news items."}
 
-async def fetch_unsummarized_news(max_items: int = 10):
-    async with async_session() as session:
-        result = await session.execute(
-            select(NewsItem).where((NewsItem.summary == None) | (NewsItem.summary == '')).limit(max_items)
-        )
-        return result.scalars().all()
+@app.post("/run-summarizer")
+async def run_summarizer_endpoint():
+    from myagents.summarizeragent import run_agent
+    count = await run_agent()
+    return {"message": f"Summarized {count} news items."}
 
-async def summarize_all_at_once(items):
-    news_block = ""
-    for idx, item in enumerate(items, start=1):
-        news_block += f"{idx}. {item.title}\n{item.summary or ''}\n\n"
+@app.post("/run-tagger")
+async def run_tagger_endpoint():
+    from myagents.taggeragent import run_tagger
+    count = await run_tagger()
+    return {"message": f"Tagged {count} news items."}
 
-    prompt = f"""
-You are a financial news summarizer.
+@app.post("/run-publisher")
+async def run_publisher_endpoint():
+    from myagents.publisheragent import run_publisher
+    count = await run_publisher()
+    return {"message": f"Published {count} news items."}
 
-Here are multiple news articles from RSS feeds:
+@app.post("/run-pipeline")
+async def run_pipeline_endpoint():
+    from myagents.collectoragent import run_collector
+    from myagents.summarizeragent import run_agent
+    from myagents.taggeragent import run_tagger
+    from myagents.publisheragent import run_publisher
 
-{news_block}
+    collected = await run_collector()
+    summarized = await run_agent()
+    tagged = await run_tagger()
+    published = await run_publisher()
 
-Task:
-1. Summarize each news item into ≤3 bullet points (≤120 chars each).
-2. Keep bullet points short & factual.
-3. For each news item, keep its original number.
+    return {
+        "message": "Pipeline complete",
+        "collected": collected,
+        "summarized": summarized,
+        "tagged": tagged,
+        "published": published
+    }
 
-Output format:
-<number>. <original title>
-   • bullet1
-   • bullet2
-   • bullet3
-"""
 
-    resp = await client.chat.completions.create(
-        model="gemini-2.0-flash",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=2000,
-        temperature=0.2
-    )
-    return resp.choices[0].message.content.strip()
 
-async def update_summaries(items, summaries_text):
-    pattern = re.compile(r'(\d+)\.\s.*?\n((?:\s*•.*\n?)+)', re.MULTILINE)
-    matches = pattern.findall(summaries_text)
+#uvicorn api_server:app --reload
 
-    summary_map = {}
-    for number, bullets in matches:
-        bullet_points = "\n".join(bullets.strip().splitlines())
-        summary_map[int(number)] = bullet_points
 
-    async with async_session() as session:
-        for idx, item in enumerate(items, start=1):
-            if idx in summary_map:
-                item.summary = summary_map[idx]
-                session.add(item)
-        await session.commit()
 
-@app.post("/run-agent")
-async def run_agent():
-    items = await fetch_unsummarized_news(max_items=10)
-    if not items:
-        return {"message": "No news to summarize."}
-    summaries_text = await summarize_all_at_once(items)
-    await update_summaries(items, summaries_text)
-    return {"message": f"Summarized {len(items)} news items."}
+
