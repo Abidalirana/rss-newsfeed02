@@ -7,7 +7,6 @@ from typing import List
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
-#from collectoragent import NewsItem, Base  # Your ORM model
 from myagents.collectoragent import NewsItem, Base
 
 from dotenv import load_dotenv
@@ -24,7 +23,7 @@ if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY is missing in .env")
 
 DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=False)  # Turn off SQL logging
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 client = AsyncOpenAI(
@@ -95,30 +94,40 @@ async def update_summaries(items: List[NewsItem], summaries_text: str):
                 session.add(item)
         await session.commit()
 
-# === Wrapper for summarizer, accepts list of NewsItem and returns updated items ===
-async def run_summarizer(items: List[NewsItem]) -> List[NewsItem]:
-    if not items:
-        return []
-
-    summaries_text = await summarize_all_at_once(items)
-    await update_summaries(items, summaries_text)
-    return items
-
 # === Main ===
+from myagents.collectoragent import run_collector
+
 async def main():
-    print("\n📥 Fetching unsummarized news from DB...")
-    items = await fetch_unsummarized_news(max_items=10)
-    if not items:
+    # First, try collector
+    collected = await run_collector([{"symbols": ["AAPL", "TSLA"], "max_results": 5}])
+    
+    if not collected:
+        print("Collector returned nothing, falling back to DB...")
+        collected = await fetch_unsummarized_news(max_items=10)
+    
+    if not collected:
         print("No news to summarize.")
         return
 
-    print(f"📰 Summarizing {len(items)} news items...")
-    summaries_text = await summarize_all_at_once(items)
-    print("\n📄 Summarizer output:\n", summaries_text)
+    summaries_text = await summarize_all_at_once(collected)
+    await update_summaries(collected, summaries_text)
 
-    print("\n💾 Updating summaries in DB...")
-    await update_summaries(items, summaries_text)
-    print("Done.")
+    print(f"Summarized {len(collected)} items and saved to DB ✅")
 
 if __name__ == "__main__":
     asyncio.run(main())
+# === Wrapper to summarize passed items (like in collector & tagger) ===
+async def run_summarizer(items=None):
+    # If no items passed or collector returned empty, fallback to DB
+    if not items:
+        items = await fetch_unsummarized_news(max_items=10)
+    
+    if not items:
+        print("No news to summarize.")
+        return []
+    
+    summaries_text = await summarize_all_at_once(items)
+    await update_summaries(items, summaries_text)
+    
+    print(f"Summarized {len(items)} items and saved to DB ✅")
+    return items

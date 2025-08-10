@@ -17,13 +17,18 @@ from sqlalchemy import (
     Text,
     DateTime,
     ARRAY,
+    select
 )
-from sqlalchemy import select
+
+# 🆕 Added import for newspaper3k
+from newspaper import Article
 
 # --- DB setup ---
 DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+# 🚫 Changed echo=True → echo=False to stop printing every SQL query
+engine = create_async_engine(DATABASE_URL, echo=False)
+
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 
@@ -34,7 +39,7 @@ class NewsItem(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(100), nullable=True)
     published_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)  # 🆗 Will store full article text here
     summary: Mapped[str] = mapped_column(Text, nullable=True)
     tags: Mapped[List[str]] = mapped_column(ARRAY(String), default=[])
     symbols: Mapped[List[str]] = mapped_column(ARRAY(String), default=[])
@@ -42,8 +47,8 @@ class NewsItem(Base):
     provider: Mapped[str] = mapped_column(String(50), nullable=True)
 
 # --- Helpers ---
-
 def clean_html(text: str) -> str:
+    """Remove HTML tags and limit to 320 chars."""
     return BeautifulSoup(text or "", "html.parser").get_text(" ", strip=True)[:320]
 
 def parse_datetime(date_str: str) -> datetime | None:
@@ -53,7 +58,6 @@ def parse_datetime(date_str: str) -> datetime | None:
         return None
 
 # --- RSS Feeds ---
-
 RSS_FEEDS = {
     "MarketWatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
     "TheStreet": "https://www.thestreet.com/.rss/full/",
@@ -72,9 +76,11 @@ RSS_FEEDS = {
     "ZeroHedge": "https://www.zerohedge.com/fullrss.xml",
 }
 
-# --- Main fetching function ---
-
+# --- Main fetching function for RSS ---
 async def fetch_and_store(max_per: int = 3) -> List[NewsItem]:
+    """
+    Fetch articles from RSS feeds, extract full content using newspaper3k, and store in DB.
+    """
     collected_items = []
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -85,7 +91,7 @@ async def fetch_and_store(max_per: int = 3) -> List[NewsItem]:
 
         for (source, resp) in zip(RSS_FEEDS.keys(), responses):
             if isinstance(resp, Exception) or resp.status_code != 200:
-                print(f"Failed to fetch {source}")
+                # 🚫 Removed verbose print — was: print(f"Failed to fetch {source}")
                 continue
 
             feed = feedparser.parse(resp.text)
@@ -104,11 +110,21 @@ async def fetch_and_store(max_per: int = 3) -> List[NewsItem]:
 
                 summary = clean_html(entry.get("summary", ""))
 
+                # 🆕 Use newspaper3k to get full article text
+                try:
+                    article_obj = Article(url)
+                    article_obj.download()
+                    article_obj.parse()
+                    full_text = article_obj.text
+                except Exception:
+                    # 🚫 Removed error printing for failed parsing
+                    full_text = None
+
                 item = NewsItem(
                     title=entry.title,
                     source=source,
                     published_at=published,
-                    content=None,
+                    content=full_text,  # 🆕 store full text
                     summary=summary,
                     tags=[],
                     symbols=[],
@@ -120,22 +136,77 @@ async def fetch_and_store(max_per: int = 3) -> List[NewsItem]:
             await session.commit()
     return collected_items
 
-# --- Create tables function ---
+# --- Custom TradingView HTML scraper ---
+async def fetch_tradingview_news() -> List[NewsItem]:
+    """
+    Fetch news from TradingView and extract full article text using newspaper3k.
+    """
+    url = "https://www.tradingview.com/news-flow"
+    collected_items = []
 
+    async with httpx.AsyncClient(timeout=15) as client, async_session() as session:
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            # 🚫 Removed: print("Failed to fetch TradingView news")
+            return collected_items
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        # Example selector: adjust as needed if TradingView changes HTML
+        articles = soup.select("div.tv-feed__item")
+        
+        for article in articles:
+            title_tag = article.select_one("a.tv-feed__item__title")
+            if not title_tag:
+                continue
+            title = title_tag.get_text(strip=True)
+            news_url = "https://www.tradingview.com" + title_tag["href"]
+
+            exists = await session.scalar(select(NewsItem.id).where(NewsItem.url == news_url))
+            if exists:
+                continue
+
+            # 🆕 Use newspaper3k to fetch full text
+            try:
+                article_obj = Article(news_url)
+                article_obj.download()
+                article_obj.parse()
+                full_text = article_obj.text
+            except Exception:
+                # 🚫 Removed printing of parsing errors
+                full_text = None
+
+            item = NewsItem(
+                title=title,
+                source="TradingView",
+                published_at=None,
+                content=full_text,  # 🆕 store full text
+                summary=None,
+                tags=[],
+                symbols=[],
+                url=news_url,
+                provider="html-scraper"
+            )
+            session.add(item)
+            collected_items.append(item)
+        
+        await session.commit()
+
+    return collected_items
+
+# --- Create tables function ---
 async def create_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 # --- Wrapper function for collector ---
-
 async def run_collector(messages=None):
-    # If you want, parse messages here to set max_per, for now fixed 3
     max_per = 3
-    collected_items = await fetch_and_store(max_per=max_per)
-    return collected_items
+    rss_items = await fetch_and_store(max_per=max_per)
+    tradingview_items = await fetch_tradingview_news()
+    return rss_items + tradingview_items
 
 # --- Main function to test ---
-
 async def main():
     await create_tables()
     print("Tables created")

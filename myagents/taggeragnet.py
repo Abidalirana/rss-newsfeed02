@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import asyncio
 import re
@@ -8,15 +7,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, mapped_column, Mapped
-from sqlalchemy import (
-    String,
-    Integer,
-    Text,
-    DateTime,
-    ARRAY,
-    update,
-    select
-)
+from sqlalchemy import String, Integer, Text, DateTime, ARRAY, update, select
 from datetime import datetime
 from bs4 import BeautifulSoup
 
@@ -59,12 +50,10 @@ def clean_html(text: str) -> str:
 
 # === Clean Gemini API response to extract JSON ===
 def clean_gemini_response(text: str) -> str:
-    # Remove ```json ... ``` fences if present
     pattern = r"```json\s*(\[\s*{.*}\s*\])\s*```"
     match = re.search(pattern, text, re.DOTALL)
     if match:
         return match.group(1)
-    # fallback: remove any ``` or ```json fences anyway
     return text.strip().strip("```").strip()
 
 # === Tagger function that calls Gemini model and updates DB ===
@@ -99,29 +88,23 @@ News items:
         temperature=0
     )
 
-    raw_content = ""
     try:
         raw_content = (
             resp.choices[0].message["content"]
             if isinstance(resp.choices[0].message, dict)
             else resp.choices[0].message.content
         )
-    except Exception as e:
-        print("❌ Could not read model output:", e)
+    except Exception:
         return []
 
     if not raw_content or not raw_content.strip():
-        print("❌ Model returned no content.")
         return []
 
-    # Clean response from backticks/code fences before parsing
     cleaned_content = clean_gemini_response(raw_content)
 
     try:
         tags_data = json.loads(cleaned_content)
-    except json.JSONDecodeError as e:
-        print("❌ Failed to parse JSON:", e)
-        print("Raw model output:", raw_content)
+    except json.JSONDecodeError:
         return []
 
     results = []
@@ -156,22 +139,24 @@ async def get_untagged_news(session: AsyncSession, limit: int = 10) -> List[News
 
 # === Main tagging loop ===
 async def main_tagger():
+    print("🔄 Starting tagging pipeline...")
     async with async_session() as session:
         untagged = await get_untagged_news(session)
         if not untagged:
             print("No untagged news items found.")
+            print("🏁 Pipeline finished: 0 items tagged.")
             return
         tagged = await tag_news_items_and_update_db(untagged, session)
-        await session.commit()  # Commit after updates
-        print(f"Tagged {len(tagged)} news items:")
+        await session.commit()
+        print(f"✅ Tagged {len(tagged)} news items.")
         for item in tagged:
-            print(item)
+            print(f"- {item['title']}")
+    print(f"🏁 Pipeline finished: {len(tagged)} items tagged.")
 
 # === Create tables ===
 async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print("Tables created")
 
 # === Run everything ===
 async def main():
@@ -181,8 +166,7 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
-#===============================================================================
-# Wrapper to tag passed items (if you want to tag from code, e.g. pipeline step)
+# === Wrapper for pipeline integration ===
 async def run_tagger(items: List[NewsItem]) -> List[dict]:
     async with async_session() as session:
         tagged_items = await tag_news_items_and_update_db(items, session)
