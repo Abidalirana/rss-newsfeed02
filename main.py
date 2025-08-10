@@ -1,5 +1,9 @@
 import asyncio
+import logging
 from myagents.mainagent import run_pipeline  # import the coroutine
+
+# Suppress SQLAlchemy engine info logs
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 async def main():
     try:
