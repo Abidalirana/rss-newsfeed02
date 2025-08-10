@@ -28,19 +28,34 @@ async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-async def save_feed_items_to_db(items: list[dict]):
-    async with async_session() as session:
-        async with session.begin():
-            for item in items:
-                result = await session.execute(
-                    NewsItem.__table__.select().where(NewsItem.url == item['url'])
-                )
-                existing = result.scalar_one_or_none()
+from sqlalchemy import select
+import logging
 
-                if existing:
-                    # Optional: update existing record here if needed
-                    pass
-                else:
+import logging
+
+# Configure logging to show only errors (no info/debug)
+logging.basicConfig(
+    level=logging.ERROR,  # Only errors and above get logged
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]  # Console output
+)
+
+async def save_feed_items_to_db(items: list[dict]):
+    try:
+        async with async_session() as session:
+            async with session.begin():
+                urls = [item['url'] for item in items]
+                if not urls:
+                    return
+
+                result = await session.execute(
+                    select(NewsItem.url).where(NewsItem.url.in_(urls))
+                )
+                existing_urls = set(row[0] for row in result.fetchall())
+
+                for item in items:
+                    if item['url'] in existing_urls:
+                        continue
                     news_item = NewsItem(
                         title=item.get('title', 'No Title'),
                         source=item.get('source'),
@@ -53,8 +68,9 @@ async def save_feed_items_to_db(items: list[dict]):
                         provider=item.get('provider')
                     )
                     session.add(news_item)
-        await session.commit()
-
+            await session.commit()
+    except Exception as e:
+        logging.error(f"Failed to save feed items: {e}")
 
 def parse_datetime(dt):
     # Converts string to datetime if needed, or returns None
