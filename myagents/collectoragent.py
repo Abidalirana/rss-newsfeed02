@@ -24,7 +24,14 @@ from sqlalchemy import (
 from newspaper import Article
 
 # --- DB setup ---
-DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+#DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+# --- DB setup ---
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # load .env in local dev, ignored in production on Render
+DATABASE_URL = os.environ["DATABASE_URL"]
+
 
 # 🚫 Changed echo=True → echo=False to stop printing every SQL query
 engine = create_async_engine(DATABASE_URL, echo=False)

@@ -4,7 +4,13 @@ from sqlalchemy import String, Integer, Text, DateTime, ARRAY, Boolean
 from datetime import datetime
 import logging
 
-DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+#==================db=======================
+import os
+from dotenv import load_dotenv
+load_dotenv()  # load .env in local dev, ignored in production on Render
+DATABASE_URL = os.environ["DATABASE_URL"]
+#=====================
+
 
 engine = create_async_engine(DATABASE_URL, echo=False)  # Set echo=False to reduce logs
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

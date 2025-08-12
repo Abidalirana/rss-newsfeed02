@@ -21,8 +21,15 @@ set_tracing_disabled(True)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY is missing in .env")
+#======================================================
+#DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+import os
+from dotenv import load_dotenv
 
-DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+load_dotenv()  # load .env in local dev, ignored in production on Render
+DATABASE_URL = os.environ["DATABASE_URL"]
+
+#======================================================
 engine = create_async_engine(DATABASE_URL, echo=False)  # Turn off SQL logging
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

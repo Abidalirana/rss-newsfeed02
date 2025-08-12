@@ -1,108 +1,153 @@
-RSS News Feed Agents
-A modular Python project that collects, summarizes, and tags financial news from multiple RSS feeds using AI (Google Gemini API). The pipeline stores processed news into a PostgreSQL database.
+📰 RSS News Feed Pipeline
+This project collects news from RSS feeds, summarizes them, tags them, and publishes them using scheduled jobs and an API.
 
-Features
-Collector Agent: Fetches news articles from specified RSS feeds or APIs.
+📂 Project Structure
+bash
+Copy
+Edit
+.
+├── api_server.py            # FastAPI server for accessing news data
+├── scheduler.py             # Runs the pipeline automatically on schedule
+├── main.py                  # Main pipeline runner
+├── myagents/
+│   ├── collectoragent.py    # Fetches RSS feeds
+│   ├── summarizeragent.py   # Summarizes articles
+│   ├── taggeragent.py       # Adds tags to news items
+│   ├── publisheragent.py    # Publishes news (marks as published)
+│   └── db.py                # Database models & save logic
+⚙️ Requirements
+Python 3.11+
 
-Summarizer Agent: Summarizes news articles into concise bullet points using AI.
+PostgreSQL (running locally or remotely)
 
-Tagger Agent: Automatically extracts relevant stock symbols and topic tags from news.
+pip or uv package manager
 
-Scheduler: Automates the pipeline to run at scheduled intervals.
-
-Database Storage: Stores news items with metadata, summaries, tags, and symbols in PostgreSQL.
-
-Async & Modular: Built with asyncio and designed for easy extension.
-
-Requirements
-Python 3.9+
-
-PostgreSQL database
-
-Dependencies listed in requirements.txt
-
-API Key for Google Gemini (set in .env)
-
-Setup
-Clone the repo:
+📦 Installation
+Clone the repository
 
 bash
 Copy
 Edit
 git clone https://github.com/Abidalirana/rss-news-feed.git
 cd rss-news-feed
-Install dependencies:
+Install dependencies
 
-bash
+Using pip:
+
+nginx
 Copy
 Edit
 pip install -r requirements.txt
-Configure PostgreSQL and update DATABASE_URL in .env file.
+Or using uv:
 
-Add your Gemini API key in .env:
-
-env
+nginx
 Copy
 Edit
-GEMINI_API_KEY=your_api_key_here
-Usage
-Run full pipeline once
-bash
+uv pip install -r requirements.txt
+Set up the database
+
+Create a PostgreSQL database:
+
+pgsql
 Copy
 Edit
-uv run mainagent.py
-or run from    uv run main.py 
-Run scheduler to automate
-bash
+CREATE DATABASE newsfeed;
+Update the connection URL in myagents/db.py:
+
+ini
+Copy
+Edit
+DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+Create tables:
+
+arduino
+Copy
+Edit
+uv run python -m myagents.db
+🚀 Running the Project
+1. Run the API server
+arduino
+Copy
+Edit
+uv run api_server.py
+API will start on: http://127.0.0.1:8000
+
+Example endpoints:
+
+/news → get news list
+
+/news/{id} → get a single news item
+
+2. Run the scheduler
+arduino
 Copy
 Edit
 uv run scheduler.py
-Project Structure
-myagents/ — Contains agents for collecting, summarizing, tagging, and database interaction.
+Runs the pipeline automatically every 1 minute (configurable inside scheduler.py).
 
-mainagent.py — Runs the full pipeline (collector → summarizer → tagger → DB).
+Scheduler will:
 
-scheduler.py — Scheduler that triggers the pipeline periodically.
+Collect new RSS feed data
 
-.env — Environment variables for keys and DB config.
+Summarize
 
-Notes
-Make sure your PostgreSQL server is running.
+Tag
 
-Gemini API usage may incur costs; monitor usage accordingly.
+Publish (mark as published in DB)
 
-Currently designed for financial news feeds, but can be extended.
+3. Run the pipeline manually
+arduino
+Copy
+Edit
+uv run main.py
+Executes the pipeline once.
 
+🛠 Configuration
+Change schedule frequency in scheduler.py:
 
+csharp
+Copy
+Edit
+schedule.every(1).minutes.do(run_async_job)  # change minutes/hours
+Change feeds in collectoragent.py.
 
+📝 Notes
+Make sure PostgreSQL is running before starting.
 
-===================================================================================================================
-===================================================================================================================
-===================================================================================================================v
-summaray of db
-The project stores news articles in a PostgreSQL table `news_items` with 10 columns:
-- id: unique identifier
-- title: article title
-- source: news source name
-- published_at: publication date/time (set by collector)
-- content: full article text (set by collector)
-- summary: summarized text (set by summarizer)
-- tags: list of tags extracted (set by tagger)
-- symbols: list of stock symbols extracted (set by tagger)
-- url: unique article URL
-- provider: source type (e.g. "rss", "html-scraper")
+First run may take longer because of initial feed collection.
 
-The data flow is:
-1. Collector fetches news, saves new articles including published_at.
-2. Summarizer generates and updates summaries.
-3. Tagger extracts and updates tags and symbols.
+publisher column in DB is False until an item is published.
 
 
-===================================================================================================================
-===================================================================================================================
-===================================================================================================================v
+
+===
+
+for db 
+SELECT * FROM news_items;
+
+SELECT published_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Karachi'
+FROM news_items;
+
+==
+How to see the data in DB
+Since your DB name is newsfeed, you can run:
+
+======
+-- Show all columns including publisher status
 
 
-checking data in  db eaver 
+SELECT id, title, url, published_at, publisher
+FROM news_items
+ORDER BY published_at DESC;
+If you want to see only published ones:
 
-SELECT * FROM news_items ORDER BY published_at DESC LIMIT 20;
+=========
+SELECT * 
+FROM news_items
+WHERE publisher = true
+ORDER BY published_at DESC;
+====
+DELETE FROM news_items;
+===
+DELETE FROM news_items WHERE publisher = false;
+===

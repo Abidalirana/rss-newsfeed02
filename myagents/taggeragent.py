@@ -21,7 +21,13 @@ if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY is missing in .env")
 
 # --- DB Setup ---
-DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+#DATABASE_URL = "postgresql+asyncpg://postgres:admin@localhost/newsfeed"
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # load .env in local dev, ignored in production on Render
+DATABASE_URL = os.environ["DATABASE_URL"]
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
