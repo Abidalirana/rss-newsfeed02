@@ -3,6 +3,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, mapped_column, Mapped
 from sqlalchemy import String, Integer, Text, DateTime, ARRAY, Boolean
 from datetime import datetime
 import logging
+from sqlalchemy import select
 
 #==================db=======================
 import os
