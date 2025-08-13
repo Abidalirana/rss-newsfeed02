@@ -13,6 +13,7 @@ async def run_pipeline():
 
 async def startup():
     await create_tables()  # create tables on startup
+    print("Tables created or already exist.")
     await run_pipeline()
 
 if __name__ == "__main__":
